@@ -39,7 +39,7 @@ def parse_annotations():
 
 
 def assign_to_volumes(center_coords, ids):
-    # figure out which volume evry cell is present in
+    # figure out which volume every cell is present in
     is_in_volume1 = pymaid.in_volume(center_coords, 'r1_boundary')
     is_in_volume2 = pymaid.in_volume(center_coords, 'r2_boundary')
     pymaid.clear_cache()
@@ -59,7 +59,8 @@ def fetch_volume(coords, stack, radius=8000):
     bbox = [c for co in zip(*min_max) for c in co]
     job = tiles.TileLoader(bbox, stack_id=STACK_IDS[stack], coords='NM')
     job.load_in_memory()
-    return job.img
+    # don't ask me why, but it always loads +1 tile for z axis
+    return job.img[:, :, 1:]
 
 
 def is_on_border(vol, thres=0.02):
@@ -74,22 +75,24 @@ def split_2_train_val(class_dict, split=0.2, seed=73):
     np.random.shuffle(classes_array)
     class_types = np.unique(classes_array[:, 1])
     classes_sorted = [classes_array[np.where(classes_array[:, 1] == type_)]
-                    for type_ in class_types]
+                      for type_ in class_types]
     classes_splits = [int(np.floor(len(one_class) * split))
-                    for one_class in classes_sorted]
+                      for one_class in classes_sorted]
     training_set = np.vstack([one_class[class_split:] for one_class, class_split
-                               in zip(classes_sorted, classes_splits)])
+                              in zip(classes_sorted, classes_splits)])
     validation_set = np.vstack([one_class[:class_split] for one_class, class_split
-                               in zip(classes_sorted, classes_splits)])
+                                in zip(classes_sorted, classes_splits)])
     return training_set, validation_set
 
 
 def save_volumes(soma_coords, skeleton_ids, label_dict, output_file_name):
     volume_assign = assign_to_volumes(soma_coords, skeleton_ids)
-    output_file = z5py.File(output_file_name, 'w')
-
+    output_file = z5py.File(output_file_name, 'a')
+    keys = list(output_file.keys())
     for n, idx in enumerate(set(skeleton_ids)):
-        if n < 310: continue
+        if str(idx) in keys:
+            print('{0}: key {1} already exists in the output file'.format(n, idx))
+            continue
         print("Processed {} cells".format(n))
         center = soma_coords.iloc[np.where(skeleton_ids == idx)[0][0]].values.copy()
         volume = volume_assign[idx]
@@ -119,11 +122,11 @@ def save_volumes(soma_coords, skeleton_ids, label_dict, output_file_name):
 if __name__ == "__main__":
 
     outp_file = sys.argv[1]
+    password = sys.argv[2]
+    api_key = sys.argv[3]
 
     _ = pymaid.CatmaidInstance('http://catmaid3.hms.harvard.edu/catmaidppc/',
-                                'kreshuk_lab', 'asdfjkl;',
-                                '249b9498c98e5f9475f33f7084035ad191db24bf',
-                                project_id=8)
+                               'kreshuk_lab', password, api_key, project_id=8)
 
     TYPES = ['pyramidal', 'not pyramidal', 'non neuronal\?', 'unclassified']
     STACK_IDS = {'volume1': 23, 'volume2': 27}
