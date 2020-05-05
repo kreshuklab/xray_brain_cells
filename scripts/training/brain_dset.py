@@ -1,4 +1,5 @@
-import h5py
+import numpy as np
+import z5py
 from torch.utils.data.dataset import Dataset
 from torch.utils.data.dataloader import DataLoader
 
@@ -11,7 +12,7 @@ from inferno.utils.io_utils import yaml2dict
 
 class CellDataset(Dataset):
     def __init__(self, volumes_file_name, labels_dset, transforms=None):
-        self.volumes = h5py.File(volumes_file_name)
+        self.volumes = z5py.File(volumes_file_name)
         self.annot_cells = self.volumes[labels_dset][:]
         self.transforms = transforms
 
@@ -21,6 +22,10 @@ class CellDataset(Dataset):
     def __getitem__(self, idx):
         key, label = self.annot_cells[idx]
         cell_volume = self.volumes[str(key)][:]
+        # if the cell is present in both xray volumes load random one
+        if cell_volume.ndim == 4 and len(cell_volume) == 2:
+            volume2choose = np.random.randint(0, 2)
+            cell_volume = cell_volume[volume2choose]
         if self.transforms:
             cell_volume = self.transforms(cell_volume)
         return cell_volume, label
