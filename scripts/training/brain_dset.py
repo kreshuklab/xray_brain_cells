@@ -1,8 +1,8 @@
 import numpy as np
 import z5py
+from torch.utils.data import WeightedRandomSampler
 from torch.utils.data.dataset import Dataset
 from torch.utils.data.dataloader import DataLoader
-
 from inferno.io.transform import Compose
 from inferno.io.transform import generic as gen_transf
 from inferno.io.transform import volume as vol_transf
@@ -15,6 +15,12 @@ class CellDataset(Dataset):
         self.volumes = z5py.File(volumes_file_name)
         self.annot_cells = self.volumes[labels_dset][:]
         self.transforms = transforms
+
+    def get_weights(self):
+        _, label_counts = np.unique(self.annot_cells[:,1], return_counts=True)
+        label_weights = len(self.annot_cells) / label_counts
+        sample_weights = label_weights[self.annot_cells[:,1]]
+        return sample_weights
 
     def __len__(self):
         return len(self.annot_cells)
@@ -64,7 +70,8 @@ def get_loaders(configuration_file):
 
     cell_dsets = [CellDataset(file_name, dset, transforms=transforms)
                   for dset in ['train_dict', 'val_dict']]
-
-    train_loader = DataLoader(cell_dsets[0], **config.get('loader_config'))
-    val_loader = DataLoader(cell_dsets[1], **config.get('val_loader_config'))
+    samplers = [WeightedRandomSampler(dset.get_weights(), len(dset), replacement=True)
+                for dset in cell_dsets]
+    train_loader = DataLoader(cell_dsets[0], sampler=samplers[0], **config.get('loader_config'))
+    val_loader = DataLoader(cell_dsets[1], sampler=samplers[1], **config.get('val_loader_config'))
     return train_loader, val_loader
