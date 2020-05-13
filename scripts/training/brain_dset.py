@@ -63,15 +63,19 @@ def get_transforms(transform_config):
     return transforms
 
 
-def get_loaders(configuration_file):
+def get_loaders(configuration_file, train=True):
     config = yaml2dict(configuration_file)
     transforms = get_transforms(config.get('transforms')) if config.get('transforms') else None
     file_name = config.get('file_name')
 
     cell_dsets = [CellDataset(file_name, dset, transforms=transforms)
                   for dset in ['train_dict', 'val_dict']]
-    samplers = [WeightedRandomSampler(dset.get_weights(), len(dset), replacement=True)
-                for dset in cell_dsets]
-    train_loader = DataLoader(cell_dsets[0], sampler=samplers[0], **config.get('loader_config'))
-    val_loader = DataLoader(cell_dsets[1], sampler=samplers[1], **config.get('val_loader_config'))
-    return train_loader, val_loader
+    if train:
+        samplers = [WeightedRandomSampler(dset.get_weights(), len(dset), replacement=True)
+                    for dset in cell_dsets]
+        train_loader = DataLoader(cell_dsets[0], sampler=samplers[0], **config.get('loader_config'))
+        val_loader = DataLoader(cell_dsets[1], sampler=samplers[1], **config.get('val_loader_config'))
+        return train_loader, val_loader
+    else:
+        val_loader = DataLoader(cell_dsets[1], **config.get('val_loader_config'))
+        return val_loader
