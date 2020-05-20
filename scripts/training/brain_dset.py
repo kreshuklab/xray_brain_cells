@@ -49,6 +49,9 @@ def get_transforms(transform_config):
         transforms.add(gen_transf.NormalizeRange(**normalize_range_config))
     if transform_config.get('flip'):
         transforms.add(vol_transf.RandomFlip3D())
+    if transform_config.get('rotate'):
+        rotate_config = transform_config.get('rotate')
+        transforms.add(vol_transf.RandomRot3D(order=3, **rotate_config))
     if transform_config.get('elastic_transform'):
         elastic_config = transform_config.get('elastic_transform')
         transforms.add(ElasticTransform(order=3, **elastic_config))
@@ -65,11 +68,12 @@ def get_transforms(transform_config):
 
 def get_loaders(configuration_file, train=True):
     config = yaml2dict(configuration_file)
-    transforms = get_transforms(config.get('transforms')) if config.get('transforms') else None
+    tfs = [get_transforms(config.get(key))
+                  for key in ['train_transforms', 'val_transforms']]
     file_name = config.get('file_name')
 
-    cell_dsets = [CellDataset(file_name, dset, transforms=transforms)
-                  for dset in ['train_dict', 'val_dict']]
+    cell_dsets = [CellDataset(file_name, dset, transforms=tfs[i])
+                  for i, dset in enumerate(['train_dict', 'val_dict'])]
     if train:
         samplers = [WeightedRandomSampler(dset.get_weights(), len(dset), replacement=True)
                     for dset in cell_dsets]
