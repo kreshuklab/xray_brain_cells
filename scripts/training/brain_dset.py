@@ -1,5 +1,6 @@
 import numpy as np
 import z5py
+import torch
 from torch.utils.data import WeightedRandomSampler
 from torch.utils.data.dataset import Dataset
 from torch.utils.data.dataloader import DataLoader
@@ -11,9 +12,14 @@ from inferno.utils.io_utils import yaml2dict
 
 
 class CellDataset(Dataset):
-    def __init__(self, volumes_file_name, labels_dset, transforms=None):
+    def __init__(self, volumes_file_name, labels_dset, transforms=None, ignore_labels=None):
         self.volumes = z5py.File(volumes_file_name)
         self.annot_cells = self.volumes[labels_dset][:]
+        if ignore_labels:
+            for i in ignore_labels:
+                self.annot_cells = self.annot_cells[np.where(self.annot_cells[:, 1] != i)]
+        # if we have binary classification, BCE loss might not like the target shape
+        self.reshape_target = False if len(np.unique(self.annot_cells[:,1])) > 2 else True
         self.transforms = transforms
 
     def get_weights(self):
@@ -27,6 +33,8 @@ class CellDataset(Dataset):
 
     def __getitem__(self, idx):
         key, label = self.annot_cells[idx]
+        if self.reshape_target:
+            label = torch.tensor(label, dtype=torch.float).unsqueeze(0)
         cell_volume = self.volumes[str(key)][:]
         # if the cell is present in both xray volumes load random one
         if cell_volume.ndim == 4 and len(cell_volume) == 2:
@@ -70,9 +78,10 @@ def get_loaders(configuration_file, train=True):
     config = yaml2dict(configuration_file)
     tfs = [get_transforms(config.get(key))
                   for key in ['train_transforms', 'val_transforms']]
+    ignore_classes = config.get('ignore_classes', None)
     file_name = config.get('file_name')
 
-    cell_dsets = [CellDataset(file_name, dset, transforms=tfs[i])
+    cell_dsets = [CellDataset(file_name, dset, transforms=tfs[i], ignore_labels=ignore_classes)
                   for i, dset in enumerate(['train_dict', 'val_dict'])]
     if train:
         samplers = [WeightedRandomSampler(dset.get_weights(), len(dset), replacement=True)
