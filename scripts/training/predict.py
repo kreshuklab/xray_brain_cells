@@ -1,3 +1,4 @@
+import argparse
 import os
 import sys
 import numpy as np
@@ -10,14 +11,18 @@ from brain_dset import get_loaders
 CLASS_NAMES = ['pyramidal', 'non pyramidal', 'non neuronal', 'unclassified']
 
 
-def predict(model, loader):
+def predict(model, loader, ae):
     all_predictions = []
     all_targets = []
     model.eval()
     with torch.no_grad():
         for cells, labels in loader:
-            preds = model(cells.cuda()).cpu().numpy().squeeze().argmax(1)
-            all_targets.extend(labels)
+            if not ae:
+                preds = model(cells.cuda()).cpu().numpy().argmax(1)
+                all_targets.extend(labels)
+            else:
+                preds = model.encode(cells.cuda())[1].cpu().numpy().argmax(1)
+                all_targets.extend(labels[0])
             all_predictions.extend(preds)
     return np.array(all_predictions), np.array(all_targets)
 
@@ -34,16 +39,18 @@ def print_results(pred_labels, true_labels):
 
 
 if __name__ == "__main__":
-    path = sys.argv[1]
-    if len(sys.argv) > 2:
-        device = str(sys.argv[2])
-    else:
-        device = '2'
-    print("The model is", os.path.split(os.path.normpath(path))[-1])
-    os.environ["CUDA_VISIBLE_DEVICES"] = device
-    config_file = os.path.join(path, 'data_config.yml')
+    parser = argparse.ArgumentParser(description='Predict brain cell type')
+    parser.add_argument('path', type=str, help='train path with model and configs')
+    parser.add_argument('--device', type=str, default='2',
+                        choices=[str(i) for i in range(8)], help='GPU to use')
+    parser.add_argument('--autoencoder', type=int, default=0,
+                        choices=[0, 1], help='Whether the model is autoencoder')
+    args = parser.parse_args()
+    print("The model is", os.path.split(os.path.normpath(args.path))[-1])
+    os.environ["CUDA_VISIBLE_DEVICES"] = args.device
+    config_file = os.path.join(args.path, 'data_config.yml')
     val_loader = get_loaders(config_file, train=False)
-    model_path = os.path.join(path, 'Weights')
+    model_path = os.path.join(args.path, 'Weights')
     best_model = Trainer().load(from_directory=model_path, best=True).model
-    predictions, targets = predict(best_model, val_loader)
+    predictions, targets = predict(best_model, val_loader, args.autoencoder)
     print_results(predictions, targets)

@@ -12,7 +12,7 @@ from inferno.utils.io_utils import yaml2dict
 
 
 class CellDataset(Dataset):
-    def __init__(self, volumes_file_name, labels_dset, transforms=None, ignore_labels=None):
+    def __init__(self, volumes_file_name, labels_dset, transforms=None, ignore_labels=None, ae=False):
         self.volumes = z5py.File(volumes_file_name)
         self.annot_cells = self.volumes[labels_dset][:]
         if ignore_labels:
@@ -21,6 +21,7 @@ class CellDataset(Dataset):
         # if we have binary classification, BCE loss might not like the target shape
         self.reshape_target = False if len(np.unique(self.annot_cells[:,1])) > 2 else True
         self.transforms = transforms
+        self.ae = ae
 
     def get_weights(self):
         _, label_counts = np.unique(self.annot_cells[:,1], return_counts=True)
@@ -42,7 +43,10 @@ class CellDataset(Dataset):
             cell_volume = cell_volume[volume2choose]
         if self.transforms:
             cell_volume = self.transforms(cell_volume)
-        return cell_volume, label
+        if not self.ae:
+            return cell_volume, label
+        else:
+            return cell_volume, [label, cell_volume]
 
 
 def get_transforms(transform_config):
@@ -81,7 +85,7 @@ def get_loaders(configuration_file, train=True):
     ignore_classes = config.get('ignore_classes', None)
     file_name = config.get('file_name')
 
-    cell_dsets = [CellDataset(file_name, dset, transforms=tfs[i], ignore_labels=ignore_classes)
+    cell_dsets = [CellDataset(file_name, dset, transforms=tfs[i], **config.get('dataset_kwargs'))
                   for i, dset in enumerate(['train_dict', 'val_dict'])]
     if train:
         samplers = [WeightedRandomSampler(dset.get_weights(), len(dset), replacement=True)
