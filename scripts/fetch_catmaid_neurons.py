@@ -53,6 +53,16 @@ def assign_to_volumes(center_coords, ids):
     return volume_assign
 
 
+def save_meta_data(center_coords, ids, out_file):
+    # locate the cells within the inner volume boundary, not on the edge
+    is_in_inner_volume1 = pymaid.in_volume(center_coords, "r1 inner boundary")
+    is_in_inner_volume2 = pymaid.in_volume(center_coords, "r2 inner boundary")
+    pymaid.clear_cache()
+    assigned_to_inner = np.column_stack([ids, is_in_inner_volume1, is_in_inner_volume2])
+    _ = out_file.create_dataset('inner_assign', data=assigned_to_inner)
+    _ = out_file.create_dataset('center_coords', data=np.column_stack([ids, center_coords]))
+
+
 def fetch_volume(coords, stack, radius=8000):
     offs_coords = coords - VOLUME_OFFSETS[stack]
     min_max = [offs_coords - radius, offs_coords + radius]
@@ -88,6 +98,8 @@ def split_2_train_val(class_dict, split=0.2, seed=73):
 def save_volumes(soma_coords, skeleton_ids, label_dict, output_file_name):
     volume_assign = assign_to_volumes(soma_coords, skeleton_ids)
     output_file = z5py.File(output_file_name, 'a')
+    save_meta_data(soma_coords, skeleton_ids, output_file)
+
     keys = list(output_file.keys())
     for n, idx in enumerate(set(skeleton_ids)):
         if str(idx) in keys:

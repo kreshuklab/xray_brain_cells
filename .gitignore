@@ -2,6 +2,7 @@ __pycache__
 data
 morph_trainings
 tmp*
+*.csv
 config*
 *.pyc
 exclude-file.txt
