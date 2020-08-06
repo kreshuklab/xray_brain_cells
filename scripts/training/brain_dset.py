@@ -9,10 +9,12 @@ from inferno.io.transform import generic as gen_transf
 from inferno.io.transform import volume as vol_transf
 from inferno.io.transform.image import ElasticTransform
 from inferno.utils.io_utils import yaml2dict
+from skimage.measure import label
 
 
 class CellDataset(Dataset):
-    def __init__(self, volumes_file_name, labels_dset, transforms=None, ignore_labels=None, ae=False):
+    def __init__(self, volumes_file_name, labels_dset, transforms=None,
+                 train=False, ignore_labels=None, ae=False):
         self.volumes = z5py.File(volumes_file_name)
         self.annot_cells = self.volumes[labels_dset][:]
         if ignore_labels:
@@ -22,12 +24,31 @@ class CellDataset(Dataset):
         self.reshape_target = False if len(np.unique(self.annot_cells[:,1])) > 2 else True
         self.transforms = transforms
         self.ae = ae
+        self.train = train
+        # for validation we need to know which cells are on the edge to preferentially not choose them
+        if not train:
+            self.inner_dict = {key: [val1, val2] for key, val1, val2
+                               in self.volumes['inner_assign'][:]}
 
     def get_weights(self):
         _, label_counts = np.unique(self.annot_cells[:,1], return_counts=True)
         label_weights = len(self.annot_cells) / label_counts
         sample_weights = label_weights[self.annot_cells[:,1]]
         return sample_weights
+
+    def choose_best_volume(self, key, volumes):
+        is_present_in = self.inner_dict[key]
+        num_black_pixels = [np.sum(vol == 0) for vol in volumes]
+        # good in both volumes - choose the one with better contrast
+        if sum(is_present_in) == 2:
+            better_vol = volumes[np.argmax(num_black_pixels)]
+        # good in only one - vhoose this volume
+        elif sum(is_present_in) == 1:
+            better_vol = volumes[np.argmax(is_present_in)]
+        #if on edge in both - choose the one with less background
+        else:
+            better_vol = volumes[np.argmax(num_black_pixels)]
+        return better_vol
 
     def __len__(self):
         return len(self.annot_cells)
@@ -37,10 +58,15 @@ class CellDataset(Dataset):
         if self.reshape_target:
             label = torch.tensor(label, dtype=torch.float).unsqueeze(0)
         cell_volume = self.volumes[str(key)][:]
-        # if the cell is present in both xray volumes load random one
+        # if the cell is present in both xray volumes
         if cell_volume.ndim == 4 and len(cell_volume) == 2:
-            volume2choose = np.random.randint(0, 2)
-            cell_volume = cell_volume[volume2choose]
+            if self.train:
+                # when training, load a random one
+                volume2choose = np.random.randint(0, 2)
+                cell_volume = cell_volume[volume2choose]
+            else:
+                # when predicting, choose the most complete
+                cell_volume = self.choose_best_volume(key, cell_volume)
         if self.transforms:
             cell_volume = self.transforms(cell_volume)
         if not self.ae:
@@ -54,6 +80,9 @@ def get_transforms(transform_config):
     if transform_config.get('crop_pad_to_size'):
         crop_pad_to_size = transform_config.get('crop_pad_to_size')
         transforms.add(vol_transf.CropPad2Size(**crop_pad_to_size))
+    if transform_config.get('random_crop'):
+        random_crop = transform_config.get('random_crop')
+        transforms.add(vol_transf.VolumeRandomCrop(**random_crop))
     if transform_config.get('cast'):
         transforms.add(gen_transf.Cast('float32'))
     if transform_config.get('normalize_range'):
@@ -80,13 +109,15 @@ def get_transforms(transform_config):
 
 def get_loaders(configuration_file, train=True):
     config = yaml2dict(configuration_file)
-    tfs = [get_transforms(config.get(key))
-                  for key in ['train_transforms', 'val_transforms']]
-    ignore_classes = config.get('ignore_classes', None)
     file_name = config.get('file_name')
 
-    cell_dsets = [CellDataset(file_name, dset, transforms=tfs[i], **config.get('dataset_kwargs'))
-                  for i, dset in enumerate(['train_dict', 'val_dict'])]
+    tfs = [get_transforms(config.get(key))
+                  for key in ['train_transforms', 'val_transforms']]
+    dicts = ['train_dict', 'val_dict']
+    is_train = [True, False]
+
+    cell_dsets = [CellDataset(file_name, dset, transforms=tfs, train=is_tr, **config.get('dataset_kwargs', {}))
+                  for tfs, dset, is_tr in zip(tfs, dicts, is_train)]
     if train:
         samplers = [WeightedRandomSampler(dset.get_weights(), len(dset), replacement=True)
                     for dset in cell_dsets]

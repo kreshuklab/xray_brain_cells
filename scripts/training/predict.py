@@ -11,18 +11,19 @@ from brain_dset import get_loaders
 CLASS_NAMES = ['pyramidal', 'non pyramidal', 'non neuronal', 'unclassified']
 
 
-def predict(model, loader, ae):
+def predict(model, loader, ae=False, return_prob=False):
     all_predictions = []
     all_targets = []
     model.eval()
     with torch.no_grad():
         for cells, labels in loader:
             if not ae:
-                preds = model(cells.cuda()).cpu().numpy().argmax(1)
+                preds = model(cells.cuda()).cpu().numpy()
                 all_targets.extend(labels)
             else:
-                preds = model.encode(cells.cuda())[1].cpu().numpy().argmax(1)
+                preds = model.encode(cells.cuda())[1].cpu().numpy()
                 all_targets.extend(labels[0])
+            preds = preds if return_prob else preds.argmax(1)
             all_predictions.extend(preds)
     return np.array(all_predictions), np.array(all_targets)
 
@@ -34,6 +35,7 @@ def print_results(pred_labels, true_labels):
                          / np.sum(true_labels == i)
         print("Accuracy for {0} is {1}".format(name, class_accuracy))
         class_accuracies.append(class_accuracy)
+    print("Average accuracy is ", np.mean(class_accuracies))
     print("Average accuracy (w/o unclassified) is ", np.mean(class_accuracies[:-1]))
     print(metrics.confusion_matrix(true_labels, pred_labels))
 
