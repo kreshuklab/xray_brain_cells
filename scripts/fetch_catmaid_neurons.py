@@ -121,7 +121,7 @@ def save_volumes(soma_coords, skeleton_ids, label_dict, output_file_name):
         pymaid.clear_cache()
 
         if volume2save:
-            volume2save = np.squeeze(np.stack([volume2save])).astype('uint8')
+            volume2save = np.stack(volume2save).astype('uint8')
             _ = output_file.create_dataset(str(idx), data=volume2save)
         else:
             del label_dict[idx]

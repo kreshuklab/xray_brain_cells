@@ -13,9 +13,10 @@ from skimage.measure import label
 
 
 class CellDataset(Dataset):
-    def __init__(self, volumes_file_name, labels_dset, transforms=None,
-                 train=False, ignore_labels=None, ae=False):
+    def __init__(self, volumes_file_name, labels_dset, segm_file_name=None,
+                 transforms=None, train=False, ignore_labels=None, ae=False):
         self.volumes = z5py.File(volumes_file_name)
+        self.segm = z5py.File(segm_file_name) if segm_file_name else None
         self.annot_cells = self.volumes[labels_dset][:]
         if ignore_labels:
             for i in ignore_labels:
@@ -41,14 +42,14 @@ class CellDataset(Dataset):
         num_black_pixels = [np.sum(vol == 0) for vol in volumes]
         # good in both volumes - choose the one with better contrast
         if sum(is_present_in) == 2:
-            better_vol = volumes[np.argmax(num_black_pixels)]
+            better_vol_id = np.argmax(num_black_pixels)
         # good in only one - vhoose this volume
         elif sum(is_present_in) == 1:
-            better_vol = volumes[np.argmax(is_present_in)]
+            better_vol_id = np.argmax(is_present_in)
         #if on edge in both - choose the one with less background
         else:
-            better_vol = volumes[np.argmax(num_black_pixels)]
-        return better_vol
+            better_vol_id = np.argmax(num_black_pixels)
+        return better_vol_id
 
     def __len__(self):
         return len(self.annot_cells)
@@ -58,15 +59,20 @@ class CellDataset(Dataset):
         if self.reshape_target:
             label = torch.tensor(label, dtype=torch.float).unsqueeze(0)
         cell_volume = self.volumes[str(key)][:]
+        if len(cell_volume) == 1:
+            volume2choose = 0
         # if the cell is present in both xray volumes
-        if cell_volume.ndim == 4 and len(cell_volume) == 2:
+        else:
             if self.train:
                 # when training, load a random one
                 volume2choose = np.random.randint(0, 2)
-                cell_volume = cell_volume[volume2choose]
             else:
                 # when predicting, choose the most complete
-                cell_volume = self.choose_best_volume(key, cell_volume)
+                volume2choose = self.choose_best_volume(key, cell_volume)
+        cell_volume = cell_volume[volume2choose]
+        if self.segm:
+            segm = self.segm[str(key)][volume2choose] * 255
+            cell_volume = np.stack([cell_volume, segm])
         if self.transforms:
             cell_volume = self.transforms(cell_volume)
         if not self.ae:
@@ -110,13 +116,16 @@ def get_transforms(transform_config):
 def get_loaders(configuration_file, train=True):
     config = yaml2dict(configuration_file)
     file_name = config.get('file_name')
+    segm_file = config.get('segm_file_name', None)
 
     tfs = [get_transforms(config.get(key))
                   for key in ['train_transforms', 'val_transforms']]
-    dicts = ['train_dict', 'val_dict']
+    #dicts = ['train_dict', 'val_dict']
+    dicts = ['train_dict', 'train_dict']
     is_train = [True, False]
 
-    cell_dsets = [CellDataset(file_name, dset, transforms=tfs, train=is_tr, **config.get('dataset_kwargs', {}))
+    cell_dsets = [CellDataset(file_name, dset, segm_file_name=segm_file, transforms=tfs,
+                              train=is_tr, **config.get('dataset_kwargs', {}))
                   for tfs, dset, is_tr in zip(tfs, dicts, is_train)]
     if train:
         samplers = [WeightedRandomSampler(dset.get_weights(), len(dset), replacement=True)

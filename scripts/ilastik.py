@@ -18,13 +18,13 @@ def get_keys(file_to_split):
     return keys
 
 
-def split_h5_file(file_to_split, keys):
+def split_n5_file(file_to_split, keys):
     outp_folder = os.path.splitext(file_to_split)[0]
     if not os.path.exists(outp_folder):
         os.mkdir(outp_folder)
-    h5_file = z5py.File(file_to_split)
+    n5_file = z5py.File(file_to_split)
     for key in keys:
-        data = h5_file[key][:]
+        data = n5_file[key][:]
         if data.ndim == 3:
             data = data[np.newaxis, ...]
         new_h5 = h5py.File(os.path.join(outp_folder, key + '.h5'), 'w')
@@ -53,7 +53,7 @@ def run_ilastik(path, ilastik_exec, projects_folder):
     subprocess.run(obj_cmd)
 
 
-def postprocess(volume, erode=5, dilate=10):
+def postprocess(volume, key, erode=5, dilate=10):
     eroded = morphology.binary_erosion(volume, iterations=erode)
     cc = measure.label(eroded, connectivity=2)
     labels, counts = np.unique(cc, return_counts=True)
@@ -62,7 +62,8 @@ def postprocess(volume, erode=5, dilate=10):
     biggest_label = labels[1:][np.argmax(counts[1:])]
     distances = [np.min(DIST_CENTER[cc == label]) for label in labels]
     central_label = labels[1:][np.argmin(distances[1:])]
-    assert biggest_label == central_label
+    if biggest_label != central_label:
+        print('WARNING: in {} biggest_label != central_label'.format(key))
     needed_cell = cc == biggest_label
     dilated = morphology.binary_dilation(needed_cell, iterations=dilate)
     return dilated
@@ -74,7 +75,7 @@ def postprocess_and_merge(path, keys):
     for cell_id in keys:
         with h5py.File(path + '_Objects/' + cell_id + '.h5') as f:
             segm = f['exported_data'][:, :, :, :, 0]
-        processed = np.stack([postprocess(s) for s in segm])
+        processed = np.stack([postprocess(s, cell_id) for s in segm]).astype(int)
         _ = out_f.create_dataset(cell_id, data=processed, compression='gzip')
     out_f.close()
     shutil.rmtree(path)
@@ -102,8 +103,8 @@ def view_all(path, keys):
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Run ilastik segmentation')
-    parser.add_argument('h5_file_name', type=str,
-                        help='h5 file to run segmentation on')
+    parser.add_argument('n5_file_name', type=str,
+                        help='n5 file to run segmentation on')
     parser.add_argument('--ilastik_exec', type=str,
                         default='/home/zinchenk/software/ilastik-1.4.0b5-Linux/run_ilastik.sh',
                         help='path to ilastik executable')
@@ -114,9 +115,9 @@ if __name__ == '__main__':
                         help='just view resulting segmentation in napari')
     args = parser.parse_args()
 
-    file_prefix = os.path.splitext(args.h5_file_name)[0]
-    cell_ids = get_keys(args.h5_file_name)
-    split_h5_file(args.h5_file_name, cell_ids)
+    file_prefix = os.path.splitext(args.n5_file_name)[0]
+    cell_ids = get_keys(args.n5_file_name)
+    split_n5_file(args.n5_file_name, cell_ids)
     run_ilastik(file_prefix, args.ilastik_exec, args.projects_folder)
 
     center_volume = np.ones((160, 160, 160))
