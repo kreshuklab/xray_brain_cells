@@ -1,18 +1,29 @@
 import argparse
 import glob
 import os
+import shutil
 import subprocess
 import napari
 import numpy as np
 import h5py
+import z5py
+from scipy.ndimage import morphology
+from skimage import measure
 
 
-def split_h5_file(file_to_split):
+def get_keys(file_to_split):
+    with z5py.File(file_to_split, 'r') as f:
+        ids = list(f.keys())
+    keys = [idx for idx in ids if idx.isdigit()]
+    return keys
+
+
+def split_h5_file(file_to_split, keys):
     outp_folder = os.path.splitext(file_to_split)[0]
     if not os.path.exists(outp_folder):
         os.mkdir(outp_folder)
-    h5_file = h5py.File(file_to_split, 'r')
-    for key in h5_file.keys():
+    h5_file = z5py.File(file_to_split)
+    for key in keys:
         data = h5_file[key][:]
         if data.ndim == 3:
             data = data[np.newaxis, ...]
@@ -20,14 +31,14 @@ def split_h5_file(file_to_split):
         _ = new_h5.create_dataset("raw", data=data, compression='gzip')
 
 
-def run_ilastik(file_name, ilastik_exec, projects_folder):
-    pixel_project = os.path.join(projects_folder, '/nuclei_pixel.ilp')
+def run_ilastik(path, ilastik_exec, projects_folder):
+    pixel_project = os.path.join(projects_folder, 'nuclei_pixel.ilp')
     class_project = os.path.join(projects_folder, 'nuclei_object.ilp')
 
-    pixel_outname = os.path.splitext(file_name)[0] + '_Probabilities/' + '{nickname}'
-    class_outname = os.path.splitext(file_name)[0] + '_Objects/' + '{nickname}'
+    pixel_outname = path + '_Probabilities/' + '{nickname}'
+    class_outname = path + '_Objects/' + '{nickname}'
 
-    raw_files = glob.glob(os.path.splitext(file_name)[0] + '/*')
+    raw_files = glob.glob(path + '/*')
     prob_files = ['{}_Probabilities/{}'.format(*os.path.split(path)) for path in raw_files]
 
     pix_cmd = [ilastik_exec, '--headless', '--project=' + pixel_project,
@@ -42,17 +53,49 @@ def run_ilastik(file_name, ilastik_exec, projects_folder):
     subprocess.run(obj_cmd)
 
 
-def view_cells(file_name):
-    with h5py.File(file_name, 'r') as f:
-        ids = list(f.keys())
-    for i, cell_id in enumerate(ids):
-        with h5py.File(os.path.splitext(file_name)[0] + '/' + cell_id + '.h5') as f:
-            raw = f['raw'][0]
-        with h5py.File(os.path.splitext(file_name)[0] + '_Objects/' + cell_id + '.h5') as f:
-            obj = f['exported_data'][0, :, :, :, 0]
-        viewer = napari.Viewer()
-        viewer.add_image(raw, blending='additive')
-        viewer.add_labels(obj, blending='additive')
+def postprocess(volume, erode=5, dilate=10):
+    eroded = morphology.binary_erosion(volume, iterations=erode)
+    cc = measure.label(eroded, connectivity=2)
+    labels, counts = np.unique(cc, return_counts=True)
+    if len(labels) == 1:
+        return np.ones_like(volume)
+    biggest_label = labels[1:][np.argmax(counts[1:])]
+    distances = [np.min(DIST_CENTER[cc == label]) for label in labels]
+    central_label = labels[1:][np.argmin(distances[1:])]
+    assert biggest_label == central_label
+    needed_cell = cc == biggest_label
+    dilated = morphology.binary_dilation(needed_cell, iterations=dilate)
+    return dilated
+
+
+def postprocess_and_merge(path, keys):
+    out_f_name = path + '_segmented.n5'
+    out_f = z5py.File(out_f_name, 'w')
+    for cell_id in keys:
+        with h5py.File(path + '_Objects/' + cell_id + '.h5') as f:
+            segm = f['exported_data'][:, :, :, :, 0]
+        processed = np.stack([postprocess(s) for s in segm])
+        _ = out_f.create_dataset(cell_id, data=processed, compression='gzip')
+    out_f.close()
+    shutil.rmtree(path)
+    shutil.rmtree(path + '_Probabilities/')
+    shutil.rmtree(path + '_Objects/')
+
+
+def view_cell(idx, path):
+    with h5py.File(path + '/' + idx + '.h5') as f:
+        raw = f['raw'][0]
+    with h5py.File(path + '_Objects/' + idx + '.h5') as f:
+        segm = f['exported_data'][0, :, :, :, 0]
+    viewer = napari.Viewer()
+    viewer.add_image(raw, blending='additive')
+    viewer.add_labels(segm, blending='additive')
+    viewer.add_labels(postprocess(segm), blending='additive')
+
+
+def view_all(path, keys):
+    for i, cell_id in enumerate(keys):
+        view_cell(cell_id, path)
         _ = input('{}, {}'.format(i, cell_id))
 
 
@@ -67,11 +110,20 @@ if __name__ == '__main__':
     parser.add_argument('--projects_folder', type=str,
                         default='/home/zinchenk/work/brain_cells/ilastik/',
                         help='folder containing ilp projects')
-    parser.add_argument('--view_cells', type=int, default=0, choices=[0, 1],
-                        help='view resulting segmentaion in napari')
+    parser.add_argument('--only_view_cells', type=int, default=0, choices=[0, 1],
+                        help='just view resulting segmentation in napari')
     args = parser.parse_args()
 
-    split_h5_file(args.h5_file_name)
-    run_ilastik(args.h5_file_name, args.ilastik_exec, args.projects_folder)
-    if args.view_cells:
-        view_cells(args.h5_file_name)
+    file_prefix = os.path.splitext(args.h5_file_name)[0]
+    cell_ids = get_keys(args.h5_file_name)
+    split_h5_file(args.h5_file_name, cell_ids)
+    run_ilastik(file_prefix, args.ilastik_exec, args.projects_folder)
+
+    center_volume = np.ones((160, 160, 160))
+    center_volume[79:81, 79:81, 79:81] = 0
+    DIST_CENTER = morphology.distance_transform_edt(center_volume)
+
+    if args.only_view_cells:
+        view_all(file_prefix, cell_ids)
+    else:
+        postprocess_and_merge(file_prefix, cell_ids)
