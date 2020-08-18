@@ -53,18 +53,20 @@ def run_ilastik(path, ilastik_exec, projects_folder):
     subprocess.run(obj_cmd)
 
 
-def postprocess(volume, key, erode=5, dilate=10):
+def postprocess(volume, key, erode=5, dilate=15):
     eroded = morphology.binary_erosion(volume, iterations=erode)
     cc = measure.label(eroded, connectivity=2)
     labels, counts = np.unique(cc, return_counts=True)
     if len(labels) == 1:
         return np.ones_like(volume)
+    labels = labels[np.where(counts > 5000)]
+    counts = counts[np.where(counts > 5000)]
     biggest_label = labels[1:][np.argmax(counts[1:])]
     distances = [np.min(DIST_CENTER[cc == label]) for label in labels]
     central_label = labels[1:][np.argmin(distances[1:])]
     if biggest_label != central_label:
         print('WARNING: in {} biggest_label != central_label'.format(key))
-    needed_cell = cc == biggest_label
+    needed_cell = cc == central_label
     dilated = morphology.binary_dilation(needed_cell, iterations=dilate)
     return dilated
 

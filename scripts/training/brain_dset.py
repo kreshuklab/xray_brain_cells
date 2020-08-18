@@ -104,7 +104,7 @@ def get_transforms(transform_config):
         transforms.add(ElasticTransform(order=3, **elastic_config))
     if transform_config.get('normalize'):
         normalize_config = transform_config.get('normalize')
-        transforms.add(gen_transf.Normalize(**normalize_config))
+        transforms.add(gen_transf.Normalize())
     if transform_config.get('noise'):
         noise_config = transform_config.get('noise')
         transforms.add(vol_transf.AdditiveNoise(**noise_config))
@@ -120,8 +120,7 @@ def get_loaders(configuration_file, train=True):
 
     tfs = [get_transforms(config.get(key))
                   for key in ['train_transforms', 'val_transforms']]
-    #dicts = ['train_dict', 'val_dict']
-    dicts = ['train_dict', 'train_dict']
+    dicts = ['train_dict', 'val_dict']
     is_train = [True, False]
 
     cell_dsets = [CellDataset(file_name, dset, segm_file_name=segm_file, transforms=tfs,
