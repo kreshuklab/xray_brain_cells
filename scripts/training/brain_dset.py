@@ -9,12 +9,13 @@ from inferno.io.transform import generic as gen_transf
 from inferno.io.transform import volume as vol_transf
 from inferno.io.transform.image import ElasticTransform
 from inferno.utils.io_utils import yaml2dict
+from scipy.ndimage import zoom
 from skimage.measure import label
 
 
 class CellDataset(Dataset):
     def __init__(self, volumes_file_name, labels_dset, segm_file_name=None,
-                 transforms=None, train=False, ignore_labels=None, ae=False):
+                 transforms=None, train=False, ignore_labels=None, ae=False, mask_out=False):
         self.volumes = z5py.File(volumes_file_name)
         self.segm = z5py.File(segm_file_name) if segm_file_name else None
         self.annot_cells = self.volumes[labels_dset][:]
@@ -25,6 +26,7 @@ class CellDataset(Dataset):
         self.reshape_target = False if len(np.unique(self.annot_cells[:,1])) > 2 else True
         self.transforms = transforms
         self.ae = ae
+        self.mask_out = mask_out
         self.train = train
         # for validation we need to know which cells are on the edge to preferentially not choose them
         if not train:
@@ -51,6 +53,13 @@ class CellDataset(Dataset):
             better_vol_id = np.argmax(num_black_pixels)
         return better_vol_id
 
+    def resize(self, volume, scale):
+        if scale == 1:
+            return volume
+        else:
+            # we have a channel axis which we don't want to scale
+            return zoom(volume, [1,] + [scale,] * 3)
+
     def __len__(self):
         return len(self.annot_cells)
 
@@ -71,14 +80,17 @@ class CellDataset(Dataset):
                 volume2choose = self.choose_best_volume(key, cell_volume)
         cell_volume = cell_volume[volume2choose]
         if self.segm:
-            segm = self.segm[str(key)][volume2choose] * 255
-            cell_volume = np.stack([cell_volume, segm])
+            segm = self.segm[str(key)][volume2choose]
+            if self.mask_out:
+                cell_volume = cell_volume * segm
+            else:
+                cell_volume = np.stack([cell_volume, segm * 255])
         if self.transforms:
             cell_volume = self.transforms(cell_volume)
         if not self.ae:
             return cell_volume, label
         else:
-            return cell_volume, [label, cell_volume]
+            return cell_volume, [label, self.resize(cell_volume, self.ae)]
 
 
 def get_transforms(transform_config):
