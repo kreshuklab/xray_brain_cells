@@ -10,17 +10,17 @@ from brain_dset import get_loaders
 CLASS_NAMES = ['pyramidal', 'non pyramidal', 'non neuronal', 'unclassified']
 
 
-def predict(model, loader, ae=False, return_prob=False):
+def predict(model, loader, return_prob=False):
     all_predictions = []
     all_targets = []
     model.eval()
     with torch.no_grad():
         for cells, labels in loader:
-            if not ae:
+            if not loader.dataset.ae:
                 preds = model(cells.cuda()).cpu().numpy()
                 all_targets.extend(labels)
             else:
-                preds = model.encode(cells.cuda())[1].cpu().numpy()
+                preds = model(cells.cuda())[0].cpu().numpy()
                 all_targets.extend(labels[0])
             preds = preds if return_prob else preds.argmax(1)
             all_predictions.extend(preds)
@@ -44,8 +44,6 @@ if __name__ == "__main__":
     parser.add_argument('path', type=str, help='train path with model and configs')
     parser.add_argument('--device', type=str, default='2',
                         choices=[str(i) for i in range(8)], help='GPU to use')
-    parser.add_argument('--autoencoder', type=int, default=0,
-                        choices=[0, 1], help='Whether the model is autoencoder')
     args = parser.parse_args()
     print("The model is", os.path.split(os.path.normpath(args.path))[-1])
     os.environ["CUDA_VISIBLE_DEVICES"] = args.device
@@ -53,5 +51,5 @@ if __name__ == "__main__":
     val_loader = get_loaders(config_file, train=False)
     model_path = os.path.join(args.path, 'Weights')
     best_model = Trainer().load(from_directory=model_path, best=True).model
-    predictions, targets = predict(best_model, val_loader, args.autoencoder)
+    predictions, targets = predict(best_model, val_loader)
     print_results(predictions, targets)
