@@ -9,13 +9,14 @@ from inferno.io.transform import generic as gen_transf
 from inferno.io.transform import volume as vol_transf
 from inferno.io.transform.image import ElasticTransform
 from inferno.utils.io_utils import yaml2dict
-from scipy.ndimage import zoom
+from scipy.ndimage import zoom, morphology
 from skimage.measure import label
 
 
 class CellDataset(Dataset):
     def __init__(self, volumes_file_name, labels_dset, segm_file_name=None,
-                 transforms=None, train=False, ignore_labels=None, ae=False, mask_out=False):
+                 transforms=None, train=False, ignore_labels=None,
+                 ae=False, mask_out=False, position_conv=False):
         self.volumes = z5py.File(volumes_file_name)
         self.segm = z5py.File(segm_file_name) if segm_file_name else None
         self.annot_cells = self.volumes[labels_dset][:]
@@ -27,6 +28,17 @@ class CellDataset(Dataset):
         self.transforms = transforms
         self.ae = ae
         self.mask_out = mask_out
+
+        # for the case we want to add positional info to convolutions
+        # we don't really care about the abs position, we need distance from the center
+        if position_conv:
+            center_volume = np.ones((160, 160, 160))
+            center_volume[79:81, 79:81, 79:81] = 0
+            dist_transf = morphology.distance_transform_edt(center_volume)
+            self.dist_transf = dist_transf / np.max(dist_transf)
+        else:
+            self.dist_transf = None
+
         self.train = train
         # for validation we need to know which cells are on the edge to preferentially not choose them
         if not train:
@@ -85,6 +97,8 @@ class CellDataset(Dataset):
                 cell_volume = cell_volume * segm
             else:
                 cell_volume = np.stack([cell_volume, segm * 255])
+        elif self.dist_transf is not None:
+            cell_volume = np.stack([cell_volume, self.dist_transf * 255])
         if self.transforms:
             cell_volume = self.transforms(cell_volume)
         if not self.ae:
@@ -115,7 +129,6 @@ def get_transforms(transform_config):
         elastic_config = transform_config.get('elastic_transform')
         transforms.add(ElasticTransform(order=3, **elastic_config))
     if transform_config.get('normalize'):
-        normalize_config = transform_config.get('normalize')
         transforms.add(gen_transf.Normalize())
     if transform_config.get('noise'):
         noise_config = transform_config.get('noise')

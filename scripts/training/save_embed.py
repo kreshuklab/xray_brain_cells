@@ -45,7 +45,7 @@ def save_embeddings(embedding, labels, path):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Predict brain cell type')
+    parser = argparse.ArgumentParser(description='Save embeddings')
     parser.add_argument('path', type=str, help='train path with model and configs')
     parser.add_argument('--device', type=str, default='2',
                         choices=[str(i) for i in range(8)], help='GPU to use')
